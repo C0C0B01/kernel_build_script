@@ -41,11 +41,6 @@ GAS_PATH = None
 MKBOOT_PATH = None
 RAMDISK_PATH = None
 
-# Global Environment Variables
-os.environ["ARCH"] = ARCH
-os.environ["CROSS_COMPILE"] = CROSS_COMPILE_PREFIX
-os.environ["TARGET_SOC"] = TARGET_SOC
-
 # Config for downloading required prebuilts
 PREBUILTS_CONFIG = {
     "Toolchain": {
@@ -112,7 +107,8 @@ def run_cmd(command: str,
             fatal_on_error: bool = True
             ) -> Optional[str]:
     """
-    Runs a shell command with custom PATH
+    Runs a shell command. The global PATH environment variable is expected
+    to be set correctly by setup_environment()
 
     Args:
         command: Shell command to run
@@ -127,22 +123,10 @@ def run_cmd(command: str,
         if cwd else f"Running: '{command}'"
     )
 
-    env = os.environ.copy()
-
-    extra_paths = filter(None, [
-        TOOLCHAIN_PATH,
-        KERNELBUILD_TOOLS_PATH,
-        GAS_PATH,
-        MKBOOT_PATH,
-        RAMDISK_PATH,
-    ])
-
-    env["PATH"] = ":".join(map(str, extra_paths)) + ":" + env["PATH"]
-
     try:
         result = subprocess.run(
             command, shell=True, check=True, cwd=cwd,
-            capture_output=True, text=True, encoding="utf-8", env=env
+            capture_output=True, text=True, encoding="utf-8"
         )
         log_message("Command succeeded")
         return result.stdout
@@ -430,6 +414,14 @@ def setup_environment():
     """
     log_message("Initializing environment...")
 
+    # Global Environment Variables
+    os.environ["ARCH"] = ARCH
+    os.environ["CROSS_COMPILE"] = CROSS_COMPILE_PREFIX
+    os.environ["TARGET_SOC"] = TARGET_SOC
+    log_message(f"Set environment variables: ARCH={os.environ['ARCH']}, "
+        f"CROSS_COMPILE={os.environ['CROSS_COMPILE']}, "
+        f"TARGET_SOC={os.environ['TARGET_SOC']}")
+
     global TOOLCHAIN_PATH, GAS_PATH, KERNELBUILD_TOOLS_PATH
     global MKBOOT_PATH, RAMDISK_PATH
 
@@ -460,6 +452,28 @@ def setup_environment():
         PREBUILTS_BASE_DIR /
         PREBUILTS_CONFIG["Ramdisk_Repo"]["target_dir_name"]
     )
+
+    log_message("Updating global PATH environment variable...")
+    extra_paths = filter(None, [
+        TOOLCHAIN_PATH,
+        KERNELBUILD_TOOLS_PATH,
+        GAS_PATH,
+        MKBOOT_PATH,
+        RAMDISK_PATH,
+    ])
+
+    # Add unique paths to the beginning of the PATH
+    current_path_dirs = os.environ["PATH"].split(os.pathsep)
+    new_path_dirs = []
+    for x in extra_paths:
+        x_str = str(x)
+        if x_str not in current_path_dirs:
+            new_path_dirs.append(x_str)
+
+    os.environ["PATH"] = os.pathsep.join(new_path_dirs + current_path_dirs)
+    log_message(f"New PATH: {os.environ['PATH']}")
+
+    log_message("Environment setup complete")
 
 def main():
     """
