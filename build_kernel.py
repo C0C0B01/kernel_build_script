@@ -17,6 +17,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 # Target architecture and SoC
 ARCH = "arm64"
 TARGET_SOC = "s5e8845"
+VARIANT = "user"
 CROSS_COMPILE_PREFIX = "aarch64-linux-gnu-"
 
 # Base directory for toolchain and other prebuilts
@@ -33,8 +34,11 @@ KERNEL_SOURCE_DIR = ROOT_DIR.parent / "exynos-kernel"
 
 # Global Paths
 OUT_DIR = None
+DIST_DIR = None
 TOOLCHAIN_PATH = None
 GAS_PATH = None
+MKBOOT_PATH = None
+RAMDISK_PATH = None
 
 # Global Environment Variables
 os.environ["ARCH"] = ARCH
@@ -56,6 +60,22 @@ PREBUILTS_CONFIG = {
         "download_type": "git",
         "repo_url": "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/",
         "branch": "main",
+        "depth": 1
+    },
+    "Ramdisk_Repo": {
+        "target_dir_name": "ramdisk_repo",
+        "bin_path_suffix": "",
+        "download_type": "git",
+        "repo_url": "https://gitlab.com/velpecula/samsung_s5e8845/a55x-kernel/kernel_samsung_prebuilt.git",
+        "branch": "main",
+        "depth": 1
+    },
+    "Mkbootimg_Tool": {
+        "target_dir_name": "mkbootimg",
+        "bin_path_suffix": "",
+        "download_type": "git",
+        "repo_url": "https://android.googlesource.com/platform/system/tools/mkbootimg",
+        "branch": "android14-qpr3-release",
         "depth": 1
     },
 }
@@ -103,6 +123,8 @@ def run_cmd(command: str,
     extra_paths = filter(None, [
         TOOLCHAIN_PATH,
         GAS_PATH,
+        MKBOOT_PATH,
+        RAMDISK_PATH,
     ])
 
     env["PATH"] = ":".join(map(str, extra_paths)) + ":" + env["PATH"]
@@ -134,11 +156,13 @@ def validate_prebuilts():
     """
     log_message("Checking required prebuilts...")
 
-    global OUT_DIR
+    global OUT_DIR, DIST_DIR
 
     required = {
         "Toolchain": TOOLCHAIN_PATH,
         "GAS": GAS_PATH,
+        "Mkbootimg Tool": MKBOOT_PATH,
+        "Ramdisk": RAMDISK_PATH,
     }
 
     for name, path in required.items():
@@ -148,6 +172,7 @@ def validate_prebuilts():
 
     # Output directory for the kernel build artifacts
     OUT_DIR = KERNEL_SOURCE_DIR / "out"
+    DIST_DIR = KERNEL_SOURCE_DIR.parent / "out" / "dist"
 
     log_message("All prebuilts verified")
 
@@ -178,6 +203,7 @@ def build_kernel(jobs: int):
     log_message(f"Starting kernel build with {jobs} parallel jobs...")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
 
     make_args = (
         f"LLVM=1 LLVM_IAS=1 ARCH={ARCH} O={OUT_DIR} "
@@ -199,6 +225,44 @@ def build_kernel(jobs: int):
     )
 
     log_message("Kernel build completed")
+
+def build_boot_image():
+    """
+    Builds boot.img from kernel image and prebuilt ramdisk
+    """
+    # Paths to input and output files
+    kernel_image_path = OUT_DIR / "arch" / ARCH / "boot" / "Image"
+    bootimg_output_path = DIST_DIR / "boot.img"
+
+    prebuilt_ramdisk = (
+        RAMDISK_PATH /
+        "boot-artifacts" / "arm64" / "exynos" / VARIANT /"ramdisk.cpio.lz4"
+    )
+
+    # Check required files
+    required_files = [
+        (kernel_image_path, "Kernel image"),
+        (prebuilt_ramdisk, "Ramdisk image"),
+    ]
+
+    for file_path, description in required_files:
+        if not file_path.is_file():
+            log_message(f"ERROR: {description} not found: {file_path}")
+            sys.exit(1)
+
+    run_cmd(
+        f"{MKBOOT_PATH / 'mkbootimg.py'} --kernel {kernel_image_path} "
+        f"--ramdisk {prebuilt_ramdisk} "
+        f"--output {bootimg_output_path} "
+        f"--pagesize 4096 "
+        f"--header_version 4 ",
+        fatal_on_error=True
+    )
+
+    if bootimg_output_path.exists():
+        log_message(f"boot.img created at {bootimg_output_path}")
+    else:
+        sys.exit(1)
 
 def unpack_tarball(archive_path: Path, dest_dir: Path):
     """
@@ -299,7 +363,7 @@ def setup_environment():
     """
     log_message("Initializing environment...")
 
-    global TOOLCHAIN_PATH, GAS_PATH
+    global TOOLCHAIN_PATH, GAS_PATH, MKBOOT_PATH, RAMDISK_PATH
 
     for name, config in PREBUILTS_CONFIG.items():
         target = PREBUILTS_BASE_DIR / config["target_dir_name"]
@@ -314,6 +378,14 @@ def setup_environment():
     GAS_PATH = (
         PREBUILTS_BASE_DIR /
         PREBUILTS_CONFIG["GAS"]["target_dir_name"]
+    )
+    MKBOOT_PATH = (
+        PREBUILTS_BASE_DIR /
+        PREBUILTS_CONFIG["Mkbootimg_Tool"]["target_dir_name"]
+    )
+    RAMDISK_PATH = (
+        PREBUILTS_BASE_DIR /
+        PREBUILTS_CONFIG["Ramdisk_Repo"]["target_dir_name"]
     )
 
 def main():
@@ -365,7 +437,10 @@ def main():
         if args.clean:
             clean_build_artifacts()
 
+        # Build kernel Image
         build_kernel(args.jobs)
+
+        build_boot_image()
 
     except SystemExit:
         log_message("Build process terminated due to fatal error")
