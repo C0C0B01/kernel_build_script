@@ -235,6 +235,16 @@ def build_kernel(jobs: int):
         fatal_on_error=True
     )
 
+    # Source and destination paths for the final kernel Image
+    image_path = OUT_DIR / "arch" / ARCH / "boot" / "Image"
+    dist_path = DIST_DIR / "Image"
+
+    try:
+        shutil.copyfile(image_path, dist_path)
+    except Exception as e:
+        log_message(f"ERROR: Failed to copy kernel Image to DIST_DIR: {e}")
+        sys.exit(1)
+
     log_message("Kernel build completed")
 
 def build_dtbo_images():
