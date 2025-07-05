@@ -36,6 +36,7 @@ KERNEL_SOURCE_DIR = ROOT_DIR.parent / "exynos-kernel"
 OUT_DIR = None
 DIST_DIR = None
 TOOLCHAIN_PATH = None
+KERNELBUILD_TOOLS_PATH = None
 GAS_PATH = None
 MKBOOT_PATH = None
 RAMDISK_PATH = None
@@ -53,6 +54,14 @@ PREBUILTS_CONFIG = {
         "download_type": "download_url",
         "download_url": "https://www.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.gz",
         "extract_name_in_archive": "llvm-20.1.8-x86_64"
+    },
+    "Kernel_Build_Tools": {
+        "target_dir_name": "kernel-build-tools",
+        "bin_path_suffix": Path("linux-x86") / "bin",
+        "download_type": "git",
+        "repo_url": "https://android.googlesource.com/kernel/prebuilts/build-tools",
+        "branch": "main-kernel-build-2023",
+        "depth": 1
     },
     "GAS": {
         "target_dir_name": "gas/linux-x86",
@@ -122,6 +131,7 @@ def run_cmd(command: str,
 
     extra_paths = filter(None, [
         TOOLCHAIN_PATH,
+        KERNELBUILD_TOOLS_PATH,
         GAS_PATH,
         MKBOOT_PATH,
         RAMDISK_PATH,
@@ -160,6 +170,7 @@ def validate_prebuilts():
 
     required = {
         "Toolchain": TOOLCHAIN_PATH,
+        "Kernel Build Tools": KERNELBUILD_TOOLS_PATH,
         "GAS": GAS_PATH,
         "Mkbootimg Tool": MKBOOT_PATH,
         "Ramdisk": RAMDISK_PATH,
@@ -225,6 +236,52 @@ def build_kernel(jobs: int):
     )
 
     log_message("Kernel build completed")
+
+def build_dtbo_images():
+    """
+    Generate dtbo.img and dtb.img from compiled *.dtbo and *.dtb files
+
+    - Uses mkdtimg for dtbo.img with custom flags
+    - Concatenates *.dtb files into dtb.img
+    """
+    arch_dts = OUT_DIR / "arch" / ARCH / "boot" / "dts"
+    dtbo_dir = arch_dts / "samsung" / "a55x"
+    dtb_dir = arch_dts / "exynos"
+
+    dtbo_files = sorted(dtbo_dir.glob("*.dtbo"))
+    dtb_files = sorted(dtb_dir.glob("*.dtb"))
+
+    if not dtbo_files:
+        log_message(f"ERROR: No *.dtbo files found in {dtbo_dir}")
+        sys.exit(1)
+    if not dtb_files:
+        log_message(f"ERROR: No *.dtb files found in {dtb_dir}")
+        sys.exit(1)
+
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+
+    dtbo_img_path = DIST_DIR / "dtbo.img"
+    dtb_img_path = DIST_DIR / "dtb.img"
+
+    # Build dtbo.img
+    custom_flags = (
+        "--custom0=/:dtbo-hw_rev "
+        "--custom1=/:dtbo-hw_rev_end "
+        "--custom2=/:edtbo-rev"
+    )
+
+    run_cmd(
+        f"{KERNELBUILD_TOOLS_PATH / 'mkdtimg'} create {dtbo_img_path} {custom_flags} "
+        + " ".join(str(f) for f in dtbo_files),
+        fatal_on_error=True
+    )
+
+    # Build dtb.img
+    with open(dtb_img_path, "wb") as out_f:
+        for dtb in dtb_files:
+            out_f.write(dtb.read_bytes())
+
+    log_message("Successfully built dtbo.img and dtb.img")
 
 def build_boot_image():
     """
@@ -363,7 +420,8 @@ def setup_environment():
     """
     log_message("Initializing environment...")
 
-    global TOOLCHAIN_PATH, GAS_PATH, MKBOOT_PATH, RAMDISK_PATH
+    global TOOLCHAIN_PATH, GAS_PATH, KERNELBUILD_TOOLS_PATH
+    global MKBOOT_PATH, RAMDISK_PATH
 
     for name, config in PREBUILTS_CONFIG.items():
         target = PREBUILTS_BASE_DIR / config["target_dir_name"]
@@ -374,6 +432,11 @@ def setup_environment():
         PREBUILTS_BASE_DIR /
         PREBUILTS_CONFIG["Toolchain"]["target_dir_name"] /
         PREBUILTS_CONFIG["Toolchain"]["bin_path_suffix"]
+    )
+    KERNELBUILD_TOOLS_PATH = (
+        PREBUILTS_BASE_DIR /
+        PREBUILTS_CONFIG["Kernel_Build_Tools"]["target_dir_name"] /
+        PREBUILTS_CONFIG["Kernel_Build_Tools"]["bin_path_suffix"]
     )
     GAS_PATH = (
         PREBUILTS_BASE_DIR /
@@ -426,6 +489,11 @@ def main():
         help=f"Number of parallel build jobs (default: {os.cpu_count()})"
     )
 
+    parser.add_argument(
+        "--create-dtbo-images",
+        action="store_true",
+        help="Create dtbo.img and dtb.img from compiled DTBO/DTB files"
+    )
     args = parser.parse_args()
 
     log_message("Starting Android kernel build process...")
@@ -439,6 +507,8 @@ def main():
 
         # Build kernel Image
         build_kernel(args.jobs)
+        if args.create_dtbo_images:
+            build_dtbo_images()
 
         build_boot_image()
 
