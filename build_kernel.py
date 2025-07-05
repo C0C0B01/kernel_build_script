@@ -22,10 +22,6 @@ CROSS_COMPILE_PREFIX = "aarch64-linux-gnu-"
 # Base directory for toolchain and other prebuilts
 PREBUILTS_BASE_DIR = ROOT_DIR.parent / "prebuilts"
 
-# Toolchain and assembler paths
-TOOLCHAIN_PATH = PREBUILTS_BASE_DIR / "clang/host/linux-x86/llvm-20.1.8-x86_64/bin"
-GAS_PATH = PREBUILTS_BASE_DIR / "gas"
-
 # Path to store the build log
 BUILD_LOG_FILE = ROOT_DIR / "kernel_build.log"
 
@@ -37,11 +33,32 @@ KERNEL_SOURCE_DIR = ROOT_DIR.parent / "exynos-kernel"
 
 # Global Paths
 OUT_DIR = None
+TOOLCHAIN_PATH = None
+GAS_PATH = None
 
 # Global Environment Variables
 os.environ["ARCH"] = ARCH
 os.environ["CROSS_COMPILE"] = CROSS_COMPILE_PREFIX
 os.environ["TARGET_SOC"] = TARGET_SOC
+
+# Config for downloading required prebuilts
+PREBUILTS_CONFIG = {
+    "Toolchain": {
+        "target_dir_name": "clang/host/linux-x86/llvm-20.1.8-x86_64",
+        "bin_path_suffix": "bin",
+        "download_type": "download_url",
+        "download_url": "https://www.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.gz",
+        "extract_name_in_archive": "llvm-20.1.8-x86_64"
+    },
+    "GAS": {
+        "target_dir_name": "gas/linux-x86",
+        "bin_path_suffix": "",
+        "download_type": "git",
+        "repo_url": "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/",
+        "branch": "main",
+        "depth": 1
+    },
+}
 
 def log_message(message: str):
     """
@@ -183,6 +200,122 @@ def build_kernel(jobs: int):
 
     log_message("Kernel build completed")
 
+def unpack_tarball(archive_path: Path, dest_dir: Path):
+    """
+    Extracts a .tar.gz archive to the given directory
+    If the archive contains a single top-level folder,
+    its contents are moved instead
+    """
+    log_message(f"Extracting '{archive_path}' to '{dest_dir}'...")
+
+    temp_dir = archive_path.parent / f"temp_extract_{os.getpid()}"
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
+    temp_dir.mkdir(parents=True)
+
+    # Extract archive to temporary path
+    run_cmd(f"tar -xzf {archive_path} -C {temp_dir}", fatal_on_error=True)
+
+    contents = list(temp_dir.iterdir())
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    if len(contents) == 1 and contents[0].is_dir():
+        log_message(f"Flattening archive by moving contents of '{contents[0]}'...")
+        for item in contents[0].iterdir():
+            shutil.move(str(item), str(dest_dir / item.name))
+    else:
+        log_message(f"Moving extracted files to '{dest_dir}'...")
+        for item in contents:
+            shutil.move(str(item), str(dest_dir / item.name))
+
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    log_message(f"Extraction complete: '{archive_path.name}'")
+
+def get_prebuilt(name: str, config: dict, target_dir: Path):
+    """
+    Fetches a prebuilt from a URL or Git repo if not already present
+    Updates Git repositories if needed
+    """
+    log_message(f"Checking prebuilt '{name}' at '{target_dir}'...")
+
+    if target_dir.exists():
+        log_message(f"Found '{name}' at '{target_dir}'.")
+        if config["download_type"] == "git":
+            log_message(f"Updating git repository for '{name}'...")
+            git_dir = target_dir / ".git"
+            if git_dir.is_dir():
+                run_cmd("git pull", cwd=target_dir, fatal_on_error=False)
+            else:
+                log_message(f"'{target_dir}' is not a Git repo, Skipping pull")
+        return
+
+    log_message(f"'{name}' not found, Fetching...")
+
+    # Ensure parent directory exists
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    download_type = config["download_type"]
+
+    if download_type == "download_url":
+        archive = ROOT_DIR / f"temp_{name.lower().replace(' ', '_')}.tar.gz"
+        url = config["download_url"]
+        log_message(f"Downloading '{name}' from: {url}")
+
+        # Choose available downloader
+        if shutil.which("wget"):
+            cmd = f"wget -q -O {archive} '{url}'"
+        elif shutil.which("curl"):
+            cmd = f"curl -s -L -o {archive} '{url}'"
+        else:
+            log_message("ERROR: wget or curl not found")
+            sys.exit(1)
+
+        run_cmd(cmd, fatal_on_error=True)
+        log_message("Download complete. Extracting...")
+        unpack_tarball(archive, target_dir)
+        os.remove(archive)
+        log_message(f"Extraction complete: {target_dir}")
+
+    elif download_type == "git":
+        repo = config["repo_url"]
+        branch = config["branch"]
+        depth = config["depth"]
+        log_message(f"Cloning git repo: {repo} (branch: {branch})")
+        run_cmd(
+            f"git clone --depth {depth} --single-branch "
+            f"--branch {branch} {repo} {target_dir}",
+            fatal_on_error=True
+        )
+        log_message(f"Cloned to: {target_dir}")
+
+    else:
+        log_message(f"ERROR: Unknown download_type '{download_type}'")
+        sys.exit(1)
+
+def setup_environment():
+    """
+    Prepares the build environment by ensuring all prebuilts are present
+    Downloads missing prebuilts and sets global paths
+    """
+    log_message("Initializing environment...")
+
+    global TOOLCHAIN_PATH, GAS_PATH
+
+    for name, config in PREBUILTS_CONFIG.items():
+        target = PREBUILTS_BASE_DIR / config["target_dir_name"]
+        get_prebuilt(name, config, target)
+
+    # Set paths to prebuilts
+    TOOLCHAIN_PATH = (
+        PREBUILTS_BASE_DIR /
+        PREBUILTS_CONFIG["Toolchain"]["target_dir_name"] /
+        PREBUILTS_CONFIG["Toolchain"]["bin_path_suffix"]
+    )
+    GAS_PATH = (
+        PREBUILTS_BASE_DIR /
+        PREBUILTS_CONFIG["GAS"]["target_dir_name"]
+    )
+
 def main():
     """
     Main entry point: parses arguments and runs the build process
@@ -225,12 +358,22 @@ def main():
 
     log_message("Starting Android kernel build process...")
 
-    validate_prebuilts()
+    try:
+        setup_environment()
+        validate_prebuilts()
 
-    if args.clean:
-        clean_build_artifacts()
+        if args.clean:
+            clean_build_artifacts()
 
-    build_kernel(args.jobs)
+        build_kernel(args.jobs)
+
+    except SystemExit:
+        log_message("Build process terminated due to fatal error")
+        sys.exit(1)
+
+    except Exception as e:
+        log_message(f"CRITICAL: Unhandled exception occurred: {e}")
+        sys.exit(1)
 
     log_message("Android kernel build completed successfully.")
 
