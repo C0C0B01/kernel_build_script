@@ -494,6 +494,12 @@ def main():
         action="store_true",
         help="Create dtbo.img and dtb.img from compiled DTBO/DTB files"
     )
+
+    parser.add_argument(
+        "--create-boot-image",
+        action="store_true",
+        help="Create boot.img using compiled kernel and prebuilt ramdisk"
+    )
     args = parser.parse_args()
 
     log_message("Starting Android kernel build process...")
@@ -510,7 +516,8 @@ def main():
         if args.create_dtbo_images:
             build_dtbo_images()
 
-        build_boot_image()
+        if args.create_boot_image:
+            build_boot_image()
 
     except SystemExit:
         log_message("Build process terminated due to fatal error")
