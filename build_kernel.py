@@ -35,6 +35,7 @@ KERNEL_DEFCONFIG = "essi_defconfig"
 KERNEL_SOURCE_DIR = ROOT_DIR.parent / "exynos-kernel"
 
 # Path to a kernel modules list file
+VENDOR_RAMDISK_DLKM_EARLY_MODULES_FILE = ROOT_DIR / "modules.early.load"
 VENDOR_RAMDISK_DLKM_MODULES_FILE = ROOT_DIR / "modules.load"
 
 # Global Paths
@@ -349,21 +350,33 @@ def read_modules_file(file_path: Path) -> list[str]:
                 modules.append(line)
     return modules
 
-def mk_vendor_rd_dlkm(mount_prefix: str, module_list_file: Path):
+def mk_vendor_rd_dlkm(mount_prefix: str,
+                    module_early_list_file: Path,
+                    module_list_file: Path):
     """
     Creates vendor_ramdisk_dlkm.cpio.lz4 from a module list and mount prefix
 
     Args:
         mount_prefix (str): Ramdisk mount point (e.g., "vendor_ramdisk_dlkm")
+        module_early_list_file (Path): Early-loaded kernel module list file
         module_list_file (Path): Kernel module list file
     """
-    if not module_list_file.is_file():
-        log_message("ERROR: Module list file does not exist")
+    # Ensure module list files exist
+    missing_files = [
+        module_early_list_file,
+        module_list_file
+    ]
+
+    if not all(file.is_file() for file in missing_files):
+        log_message(f"ERROR: One or more module list files are missing: {missing_files}")
         sys.exit(1)
+
+    # Read early and normal module lists
+    early_modules = read_modules_file(module_early_list_file)
+    normal_modules = read_modules_file(module_list_file)
 
     dist_dir = Path(DIST_DIR)
     base_modules_dir = Path(MODULES_STAGING_DIR) / "lib" / "modules"
-    vendor_modules_file = Path(module_list_file)
     tools_path = Path(KERNELBUILD_TOOLS_PATH)
 
     final_output_path = dist_dir / "vendor_ramdisk_dlkm.cpio.lz4"
@@ -382,7 +395,7 @@ def mk_vendor_rd_dlkm(mount_prefix: str, module_list_file: Path):
 
     output_cpio_path = staging_dir.parent / "vendor_ramdisk_dlkm.cpio"
 
-    vendor_modules = read_modules_file(vendor_modules_file)
+    vendor_modules = early_modules + normal_modules
     modules_copied = 0
     if not vendor_modules:
         log_message("ERROR: Module list is empty")
@@ -720,6 +733,7 @@ def main():
         if args.build_vendor_ramdisk_dlkm:
             mk_vendor_rd_dlkm(
                 mount_prefix="",
+                module_early_list_file=VENDOR_RAMDISK_DLKM_EARLY_MODULES_FILE,
                 module_list_file=VENDOR_RAMDISK_DLKM_MODULES_FILE
             )
 

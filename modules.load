@@ -1,8 +1,3 @@
-exynos-chipid_v2.ko
-exynos-reboot.ko
-clk_exynos.ko
-s3c2410_wdt.ko
-exynos_mct_v3.ko
 ems.ko
 ssg.ko
 blk-sec-common.ko
