@@ -339,7 +339,7 @@ def read_modules_file(file_path: Path) -> list[str]:
     """
     if not file_path.is_file():
         log_message(f"WARNING: Module list file not found: {file_path}")
-        return []
+        sys.exit(1)
 
     modules = []
     with open(file_path, 'r') as f:
