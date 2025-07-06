@@ -437,22 +437,24 @@ def mk_vendor_rd_dlkm(mount_prefix: str,
 
     run_cmd(f"{depmod} -b {staging_dir} {kernel_version}", fatal_on_error=True)
 
-    dep_file = flat_dir / "modules.dep"
+    # Flatten: move contents from lib/modules/<version>/ to lib/modules/
+    flat_mod_root = staging_dir / "lib" / "modules"
+    for item in flat_dir.iterdir():
+        shutil.move(str(item), flat_mod_root / item.name)
+    shutil.rmtree(flat_dir)
+
+    dep_file = flat_mod_root / "modules.dep"
     if dep_file.exists():
         new_lines = []
         with open(dep_file, "r") as f:
             for line in f:
-                line = line.strip()
-                if not line:
-                    new_lines.append("")
-                    continue
-                parts = line.split(":", 1)
-                main = f"{mount_prefix}/lib/modules/{kernel_version}/{parts[0].strip()}"
-                deps = " ".join(
-                    f"{mount_prefix}/lib/modules/{kernel_version}/{d.strip()}"
-                        for d in parts[1].split()
-                ) if len(parts) == 2 else ""
-                new_lines.append(f"{main}: {deps}".rstrip(": "))
+                parts = line.strip().split(":", 1)
+                main = f"{mount_prefix}/lib/modules/{parts[0].strip()}"
+                deps = ""
+                if len(parts) == 2:
+                    deps = " ".join(f"{mount_prefix}/lib/modules/{d.strip()}"
+                            for d in parts[1].split())
+                new_lines.append(f"{main}: {deps}".rstrip())
         with open(dep_file, "w") as f:
             f.write("\n".join(new_lines))
     else:
@@ -463,7 +465,7 @@ def mk_vendor_rd_dlkm(mount_prefix: str,
     for name in ["modules.builtin",  "modules.builtin.modinfo",
                 "modules.builtin.alias.bin", "modules.builtin.bin"]:
         src = base_modules_dir / kernel_version / name
-        dst = flat_dir / name
+        dst = flat_mod_root / name
         if src.exists():
             shutil.copy(src, dst)
         else:
@@ -471,7 +473,7 @@ def mk_vendor_rd_dlkm(mount_prefix: str,
 
     # Create modules.load and modules.order files
     for filename in ["modules.load", "modules.order"]:
-        output_file_path = flat_dir / filename
+        output_file_path = flat_mod_root / filename
         with open(output_file_path, "w") as f:
             for name in vendor_modules:
                 if name.endswith(".ko"):
