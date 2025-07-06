@@ -7,6 +7,8 @@ import shutil
 import argparse
 import datetime
 import re
+import stat
+import tempfile
 from pathlib import Path
 from textwrap import dedent
 from typing import Optional
@@ -32,6 +34,9 @@ KERNEL_DEFCONFIG = "essi_defconfig"
 # Path to the kernel source tree
 KERNEL_SOURCE_DIR = ROOT_DIR.parent / "exynos-kernel"
 
+# Path to a kernel modules list file
+VENDOR_RAMDISK_DLKM_MODULES_FILE = ROOT_DIR / "modules.load"
+
 # Global Paths
 OUT_DIR = None
 DIST_DIR = None
@@ -40,6 +45,7 @@ KERNELBUILD_TOOLS_PATH = None
 GAS_PATH = None
 MKBOOT_PATH = None
 RAMDISK_PATH = None
+MODULES_STAGING_DIR = None
 
 # Config for downloading required prebuilts
 PREBUILTS_CONFIG = {
@@ -150,7 +156,7 @@ def validate_prebuilts():
     """
     log_message("Checking required prebuilts...")
 
-    global OUT_DIR, DIST_DIR
+    global OUT_DIR, DIST_DIR, MODULES_STAGING_DIR
 
     required = {
         "Toolchain": TOOLCHAIN_PATH,
@@ -168,6 +174,7 @@ def validate_prebuilts():
     # Output directory for the kernel build artifacts
     OUT_DIR = KERNEL_SOURCE_DIR / "out"
     DIST_DIR = KERNEL_SOURCE_DIR.parent / "out" / "dist"
+    MODULES_STAGING_DIR = OUT_DIR / "modules_install"
 
     log_message("All prebuilts verified")
 
@@ -199,6 +206,7 @@ def build_kernel(jobs: int):
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     DIST_DIR.mkdir(parents=True, exist_ok=True)
+    MODULES_STAGING_DIR.mkdir(parents=True, exist_ok=True)
 
     make_args = (
         f"LLVM=1 LLVM_IAS=1 ARCH={ARCH} O={OUT_DIR} "
@@ -217,6 +225,15 @@ def build_kernel(jobs: int):
         f"make -j{jobs} {make_args}", 
         cwd=KERNEL_SOURCE_DIR,
         fatal_on_error=True
+    )
+
+    # Install modules to the staging directory
+    log_message(f"Installing all modules to: {MODULES_STAGING_DIR}...")
+    run_cmd(
+        f"make -j{jobs} {make_args} "
+        f"INSTALL_MOD_STRIP='--strip-debug --keep-section=.ARM.attributes' "
+        f"INSTALL_MOD_PATH={MODULES_STAGING_DIR} modules_install",
+        cwd=KERNEL_SOURCE_DIR
     )
 
     # Source and destination paths for the final kernel Image
@@ -314,6 +331,155 @@ def build_boot_image():
         log_message(f"boot.img created at {bootimg_output_path}")
     else:
         sys.exit(1)
+
+def read_modules_file(file_path: Path) -> list[str]:
+    """
+    Reads a list of modules from a text file, one module per line
+    Ignores empty lines and lines starting with '#'
+    """
+    if not file_path.is_file():
+        log_message(f"WARNING: Module list file not found: {file_path}")
+        return []
+
+    modules = []
+    with open(file_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                modules.append(line)
+    return modules
+
+def mk_vendor_rd_dlkm(mount_prefix: str, module_list_file: Path):
+    """
+    Creates vendor_ramdisk_dlkm.cpio.lz4 from a module list and mount prefix
+
+    Args:
+        mount_prefix (str): Ramdisk mount point (e.g., "vendor_ramdisk_dlkm")
+        module_list_file (Path): Kernel module list file
+    """
+    if not module_list_file.is_file():
+        log_message("ERROR: Module list file does not exist")
+        sys.exit(1)
+
+    dist_dir = Path(DIST_DIR)
+    base_modules_dir = Path(MODULES_STAGING_DIR) / "lib" / "modules"
+    vendor_modules_file = Path(module_list_file)
+    tools_path = Path(KERNELBUILD_TOOLS_PATH)
+
+    final_output_path = dist_dir / "vendor_ramdisk_dlkm.cpio.lz4"
+    final_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    kernel_dirs = list(base_modules_dir.glob("*-*"))
+    if not kernel_dirs:
+        log_message("ERROR: No kernel version found")
+        sys.exit(1)
+    kernel_version = kernel_dirs[0].name
+    log_message(f"Kernel version: {kernel_version}")
+
+    staging_dir = Path(tempfile.mkdtemp(prefix="vendor_ramdisk_dlkm_staging_"))
+    flat_dir = staging_dir / "lib" / "modules" / kernel_version
+    flat_dir.mkdir(parents=True, exist_ok=True)
+
+    output_cpio_path = staging_dir.parent / "vendor_ramdisk_dlkm.cpio"
+
+    vendor_modules = read_modules_file(vendor_modules_file)
+    modules_copied = 0
+    if not vendor_modules:
+        log_message("ERROR: Module list is empty")
+        sys.exit(1)
+
+    for name in vendor_modules:
+        found = list(base_modules_dir.rglob(name))
+        if found:
+            shutil.copy(found[0], flat_dir / name)
+            modules_copied += 1
+        else:
+            log_message(f"ERROR: Module not found: {name}")
+            sys.exit(1)
+
+    if modules_copied == 0:
+        log_message("No modules copied, check module list or install path")
+        sys.exit(1)
+
+    # Ensure required tools exist
+    mkbootfs = lz4 = depmod = None
+    for name in ["mkbootfs", "lz4", "depmod"]:
+        tool = tools_path / name
+        if not tool.is_file():
+            log_message(f"ERROR: {name} not found: {tool}")
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            output_cpio_path.unlink(missing_ok=True)
+            sys.exit(1)
+        tool.chmod(tool.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        if name == "mkbootfs":
+            mkbootfs = tool
+        elif name == "depmod":
+            depmod = tool
+        elif name == "lz4":
+            lz4 = tool
+
+    if not all([mkbootfs, lz4, depmod]):
+        log_message("ERROR: One or more required tools are missing after path assignment")
+        sys.exit(1)
+
+    run_cmd(f"{depmod} -b {staging_dir} {kernel_version}", fatal_on_error=True)
+
+    dep_file = flat_dir / "modules.dep"
+    if dep_file.exists():
+        new_lines = []
+        with open(dep_file, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    new_lines.append("")
+                    continue
+                parts = line.split(":", 1)
+                main = f"{mount_prefix}/lib/modules/{kernel_version}/{parts[0].strip()}"
+                deps = " ".join(
+                    f"{mount_prefix}/lib/modules/{kernel_version}/{d.strip()}"
+                        for d in parts[1].split()
+                ) if len(parts) == 2 else ""
+                new_lines.append(f"{main}: {deps}".rstrip(": "))
+        with open(dep_file, "w") as f:
+            f.write("\n".join(new_lines))
+    else:
+        log_message("ERROR: modules.dep not found")
+        sys.exit(1)
+
+    # Copy modules.builtin files
+    for name in ["modules.builtin",  "modules.builtin.modinfo",
+                "modules.builtin.alias.bin", "modules.builtin.bin"]:
+        src = base_modules_dir / kernel_version / name
+        dst = flat_dir / name
+        if src.exists():
+            shutil.copy(src, dst)
+        else:
+            log_message(f"WARNING: {name} not found in {src.parent}")
+
+    # Create modules.load and modules.order files
+    for filename in ["modules.load", "modules.order"]:
+        output_file_path = flat_dir / filename
+        with open(output_file_path, "w") as f:
+            for name in vendor_modules:
+                if name.endswith(".ko"):
+                    f.write(name + "\n")
+
+    try:
+        with open(output_cpio_path, 'wb') as out:
+            subprocess.run([str(mkbootfs), str(staging_dir)], stdout=out, check=True)
+
+        run_cmd(
+            f"{lz4} -9 -f -l {output_cpio_path} {final_output_path}",
+            fatal_on_error=True
+        )
+
+    except Exception as e:
+        log_message(f"ERROR during CPIO creation or compression: {e}")
+        sys.exit(1)
+
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        output_cpio_path.unlink(missing_ok=True)
 
 def unpack_tarball(archive_path: Path, dest_dir: Path):
     """
@@ -524,6 +690,13 @@ def main():
         action="store_true",
         help="Create boot.img using compiled kernel and prebuilt ramdisk"
     )
+
+    parser.add_argument(
+        "--build-vendor-ramdisk-dlkm",
+        action="store_true",
+        help="Build vendor_ramdisk_dlkm.cpio.lz4"
+    )
+
     args = parser.parse_args()
 
     log_message("Starting Android kernel build process...")
@@ -542,6 +715,13 @@ def main():
 
         if args.create_boot_image:
             build_boot_image()
+
+        # Build vendor_ramdisk_dlkm if requested
+        if args.build_vendor_ramdisk_dlkm:
+            mk_vendor_rd_dlkm(
+                mount_prefix="",
+                module_list_file=VENDOR_RAMDISK_DLKM_MODULES_FILE
+            )
 
     except SystemExit:
         log_message("Build process terminated due to fatal error")
