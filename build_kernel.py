@@ -532,7 +532,8 @@ def get_system_dlkm_list() -> list[str]:
 
 def build_dlkm_image(image_name: str,
                     modules_list_file: Optional[Path],
-                    mount_prefix: str):
+                    mount_prefix: str,
+                    sign_modules: bool = False):
     """
     Build a DLKM image in EROFS format using mkfs.erofs
 
@@ -554,6 +555,11 @@ def build_dlkm_image(image_name: str,
     dist_dir = Path(DIST_DIR)
     base_modules_dir = Path(MODULES_STAGING_DIR) / "lib" / "modules"
     tools_path = Path(KERNELBUILD_TOOLS_PATH)
+
+    # keys
+    sign_tool = OUT_DIR / "scripts" / "sign-file"
+    key_pem = OUT_DIR / "certs" / "signing_key.pem"
+    key_x509 = OUT_DIR / "certs" / "signing_key.x509"
 
     final_img = dist_dir / f"{image_name}.img"
     final_img.parent.mkdir(parents=True, exist_ok=True)
@@ -578,7 +584,30 @@ def build_dlkm_image(image_name: str,
         for name in modules:
             found = list(base_modules_dir.rglob(name))
             if found:
-                shutil.copy(found[0], flat_dir / name)
+                dst = flat_dir / name
+                shutil.copy(found[0], dst)
+
+                # Sign modules
+                if sign_modules:
+                    required_signing_files = [
+                        sign_tool,
+                        key_pem,
+                        key_x509,
+                    ]
+                    if not all(x.is_file() for x in required_signing_files):
+                        log_message("ERROR: Missing signing tool or keys")
+                        sys.exit(1)
+
+                    result = subprocess.run([
+                        str(sign_tool), "sha1",
+                        str(key_pem),
+                        str(key_x509),
+                        str(dst)
+                    ])
+                    if result.returncode != 0:
+                        log_message(f"ERROR: Failed to sign {name}")
+                        sys.exit(1)
+
                 modules_copied += 1
             else:
                 log_message(f"WARNING: Module not found: {name}")
@@ -923,13 +952,15 @@ def main():
         if args.build_dlkm_image:
             build_dlkm_image(
                 image_name="system_dlkm",
-                modules_list_file =None,
-                mount_prefix="/system_dlkm"
+                modules_list_file=None,
+                mount_prefix="/system_dlkm",
+                sign_modules=True,
             )
             build_dlkm_image(
                 image_name="vendor_dlkm",
                 modules_list_file=VENDOR_DLKM_MODULES_FILE,
-                mount_prefix="/vendor_dlkm"
+                mount_prefix="/vendor_dlkm",
+                sign_modules=False,
             )
 
     except SystemExit:
