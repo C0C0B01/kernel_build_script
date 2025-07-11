@@ -37,6 +37,8 @@ KERNEL_SOURCE_DIR = ROOT_DIR.parent / "exynos-kernel"
 # Path to a kernel modules list file
 VENDOR_RAMDISK_DLKM_EARLY_MODULES_FILE = ROOT_DIR / "modules.early.load"
 VENDOR_RAMDISK_DLKM_MODULES_FILE = ROOT_DIR / "modules.load"
+SYSTEM_DLKM_MODULES_FILE = ROOT_DIR / "modules.load.system_dlkm"
+VENDOR_DLKM_MODULES_FILE = ROOT_DIR / "modules.load.vendor_dlkm"
 
 # Global Paths
 OUT_DIR = None
@@ -496,6 +498,134 @@ def mk_vendor_rd_dlkm(mount_prefix: str,
         shutil.rmtree(staging_dir, ignore_errors=True)
         output_cpio_path.unlink(missing_ok=True)
 
+def build_dlkm_image(image_name: str,
+                    modules_list_file: Path,
+                    mount_prefix: str):
+    """
+    Build a DLKM image in EROFS format using mkfs.erofs
+
+    Args:
+        image_name (str): Output image name (e.g., "system_dlkm")
+        modules_list_file (Path): List of kernel module filenames to include
+        mount_prefix (str): Mount point inside the image (e.g., "/system_dlkm")
+    """
+    if not modules_list_file.is_file():
+        log_message(f"ERROR: Module list file not found: {modules_list_file}")
+        sys.exit(1)
+
+    dist_dir = Path(DIST_DIR)
+    base_modules_dir = Path(MODULES_STAGING_DIR) / "lib" / "modules"
+    tools_path = Path(KERNELBUILD_TOOLS_PATH)
+
+    final_img = dist_dir / f"{image_name}.img"
+    final_img.parent.mkdir(parents=True, exist_ok=True)
+
+    kernel_dirs = list(base_modules_dir.glob("*-*"))
+    if not kernel_dirs:
+        log_message("ERROR: No kernel version found")
+        sys.exit(1)
+    kernel_version = kernel_dirs[0].name
+    log_message(f"Kernel version: {kernel_version}")
+
+    staging_dir = Path(tempfile.mkdtemp(prefix=f"{image_name}_staging_"))
+    try:
+        flat_dir = staging_dir / "lib" / "modules" / kernel_version
+        flat_dir.mkdir(parents=True, exist_ok=True)
+
+        modules = read_modules_file(modules_list_file)
+        modules_copied = 0
+        if not modules:
+            log_message("ERROR: Module list is empty")
+            sys.exit(1)
+
+        for name in modules:
+            found = list(base_modules_dir.rglob(name))
+            if found:
+                shutil.copy(found[0], flat_dir / name)
+                modules_copied += 1
+            else:
+                log_message(f"WARNING: Module not found: {name}")
+
+        if modules_copied == 0:
+            log_message("No modules copied, check module list or install path")
+            sys.exit(1)
+
+        # Ensure required tools exist
+        mkfs = depmod = None
+        for name in ["mkfs.erofs", "depmod"]:
+            tool = tools_path / name
+            if not tool.is_file():
+                log_message(f"ERROR: {name} not found: {tool}")
+                sys.exit(1)
+            tool.chmod(tool.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            if name == "mkfs.erofs":
+                mkfs = tool
+            elif name == "depmod":
+                depmod = tool
+
+        if not all([mkfs, depmod]):
+            log_message("ERROR: One or more required tools are missing after path assignment")
+            sys.exit(1)
+
+        run_cmd(f"{depmod} -b {staging_dir} {kernel_version}", fatal_on_error=True)
+
+        depfile = flat_dir / "modules.dep"
+        if depfile.exists():
+            if image_name == "system_dlkm":
+                prefix = f"/system/lib/modules/{kernel_version}/"
+            elif image_name == "vendor_dlkm":
+                prefix = f"/vendor/lib/modules/{kernel_version}/"
+            else:
+                log_message(f"ERROR: Unknown image name: {image_name}")
+                sys.exit(1)
+
+            lines = []
+            with open(depfile) as f:
+                for line in f:
+                    parts = line.strip().split(":", 1)
+                    module = parts[0].strip()
+                    deps = ""
+                    if len(parts) > 1:
+                        deps = " ".join(prefix + d.strip() for d in parts[1].split())
+                    lines.append(f"{prefix}{module}: {deps}".rstrip())
+            with open(depfile, "w") as f:
+                f.write("\n".join(lines))
+        else:
+            log_message("ERROR: modules.dep not found")
+            sys.exit(1)
+
+        # Copy modules.builtin files
+        for name in ["modules.builtin", "modules.builtin.modinfo",
+                     "modules.builtin.alias.bin", "modules.builtin.bin"]:
+            src = base_modules_dir / kernel_version / name
+            dst = flat_dir / name
+            if src.exists():
+                shutil.copy(src, dst)
+            else:
+                log_message(f"WARNING: {name} not found in {src.parent}")
+
+        # Create modules.load and modules.order
+        for filename in ["modules.load", "modules.order"]:
+            output_file_path = flat_dir / filename
+            with open(output_file_path, "w") as f:
+                for name in modules:
+                    if name.endswith(".ko"):
+                        f.write(name + "\n")
+
+        # Create the EROFS image
+        run_cmd(
+            f"{mkfs} "
+            f"-z lz4hc,9 "
+            f"-T 0 "
+            f"--mount-point {mount_prefix.strip('/')} "
+            f"{str(final_img)} "
+            f"{str(staging_dir)}",
+            fatal_on_error=True
+        )
+
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+
 def unpack_tarball(archive_path: Path, dest_dir: Path):
     """
     Extracts a .tar.gz archive to the given directory
@@ -712,6 +842,12 @@ def main():
         help="Build vendor_ramdisk_dlkm.cpio.lz4"
     )
 
+    parser.add_argument(
+        "--build-dlkm-image",
+        action="store_true",
+        help="Build system_dlkm.img and vendor_dlkm.img using mkfs.erofs"
+    )
+
     args = parser.parse_args()
 
     log_message("Starting Android kernel build process...")
@@ -737,6 +873,19 @@ def main():
                 mount_prefix="",
                 module_early_list_file=VENDOR_RAMDISK_DLKM_EARLY_MODULES_FILE,
                 module_list_file=VENDOR_RAMDISK_DLKM_MODULES_FILE
+            )
+
+        # Build system_dlkm and vendor_dlkm images if needed
+        if args.build_dlkm_image:
+            build_dlkm_image(
+                image_name="system_dlkm",
+                modules_list_file=SYSTEM_DLKM_MODULES_FILE,
+                mount_prefix="/system_dlkm"
+            )
+            build_dlkm_image(
+                image_name="vendor_dlkm",
+                modules_list_file=VENDOR_DLKM_MODULES_FILE,
+                mount_prefix="/vendor_dlkm"
             )
 
     except SystemExit:
