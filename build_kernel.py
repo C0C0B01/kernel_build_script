@@ -37,7 +37,6 @@ KERNEL_SOURCE_DIR = ROOT_DIR.parent / "exynos-kernel"
 # Path to a kernel modules list file
 VENDOR_RAMDISK_DLKM_EARLY_MODULES_FILE = ROOT_DIR / "modules.early.load"
 VENDOR_RAMDISK_DLKM_MODULES_FILE = ROOT_DIR / "modules.load"
-SYSTEM_DLKM_MODULES_FILE = ROOT_DIR / "modules.load.system_dlkm"
 VENDOR_DLKM_MODULES_FILE = ROOT_DIR / "modules.load.vendor_dlkm"
 
 # Global Paths
@@ -498,8 +497,41 @@ def mk_vendor_rd_dlkm(mount_prefix: str,
         shutil.rmtree(staging_dir, ignore_errors=True)
         output_cpio_path.unlink(missing_ok=True)
 
+def get_system_dlkm_list() -> list[str]:
+    """
+    Extracts .ko filenames from modules.bzl under
+    _COMMON_GKI_MODULES_LIST and _ARM64_GKI_MODULES_LIST
+
+    Returns:
+        list[str]: Sorted unique list of .ko filenames
+    """
+    bzl_path = KERNEL_SOURCE_DIR / "modules.bzl"
+    markers = ["_COMMON_GKI_MODULES_LIST", "_ARM64_GKI_MODULES_LIST"]
+    system_dlkm_mod_list = set()
+
+    try:
+        with open(bzl_path, "r") as f:
+            lines = f.readlines()
+
+        capture = False
+        for line in lines:
+            if any(marker in line for marker in markers):
+                capture = True
+                continue
+            if capture:
+                match = re.search(r'^\s*"([^"]+\.ko)"', line)
+                if match:
+                    system_dlkm_mod_list.add(Path(match.group(1)).name)
+                elif "]" in line:
+                    capture = False
+    except FileNotFoundError:
+        log_message(f"ERROR: modules.bzl not found: {bzl_path}")
+        sys.exit(1)
+
+    return sorted(system_dlkm_mod_list)
+
 def build_dlkm_image(image_name: str,
-                    modules_list_file: Path,
+                    modules_list_file: Optional[Path],
                     mount_prefix: str):
     """
     Build a DLKM image in EROFS format using mkfs.erofs
@@ -509,8 +541,14 @@ def build_dlkm_image(image_name: str,
         modules_list_file (Path): List of kernel module filenames to include
         mount_prefix (str): Mount point inside the image (e.g., "/system_dlkm")
     """
-    if not modules_list_file.is_file():
-        log_message(f"ERROR: Module list file not found: {modules_list_file}")
+    if image_name == "system_dlkm":
+        log_message("Reading system_dlkm modules from modules.bzl...")
+        modules = get_system_dlkm_list()
+    else:
+        modules = read_modules_file(modules_list_file)
+
+    if not modules:
+        log_message(f"ERROR: No modules found for {image_name}")
         sys.exit(1)
 
     dist_dir = Path(DIST_DIR)
@@ -532,7 +570,6 @@ def build_dlkm_image(image_name: str,
         flat_dir = staging_dir / "lib" / "modules" / kernel_version
         flat_dir.mkdir(parents=True, exist_ok=True)
 
-        modules = read_modules_file(modules_list_file)
         modules_copied = 0
         if not modules:
             log_message("ERROR: Module list is empty")
@@ -886,7 +923,7 @@ def main():
         if args.build_dlkm_image:
             build_dlkm_image(
                 image_name="system_dlkm",
-                modules_list_file=SYSTEM_DLKM_MODULES_FILE,
+                modules_list_file =None,
                 mount_prefix="/system_dlkm"
             )
             build_dlkm_image(
