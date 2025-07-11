@@ -569,27 +569,26 @@ def build_dlkm_image(image_name: str,
 
         run_cmd(f"{depmod} -b {staging_dir} {kernel_version}", fatal_on_error=True)
 
-        depfile = flat_dir / "modules.dep"
-        if depfile.exists():
-            if image_name == "system_dlkm":
-                prefix = f"/system/lib/modules/{kernel_version}/"
-            elif image_name == "vendor_dlkm":
-                prefix = f"/vendor/lib/modules/{kernel_version}/"
-            else:
-                log_message(f"ERROR: Unknown image name: {image_name}")
-                sys.exit(1)
+        # Flatten: move contents from lib/modules/<version>/ to lib/modules/
+        flat_mod_root = staging_dir / "lib" / "modules"
+        for item in flat_dir.iterdir():
+            shutil.move(str(item), flat_mod_root / item.name)
+        shutil.rmtree(flat_dir)
 
-            lines = []
-            with open(depfile) as f:
+        dep_file = flat_mod_root / "modules.dep"
+        if dep_file.exists():
+            new_lines = []
+            with open(dep_file, "r") as f:
                 for line in f:
                     parts = line.strip().split(":", 1)
-                    module = parts[0].strip()
+                    main = f"{mount_prefix}/lib/modules/{parts[0].strip()}"
                     deps = ""
-                    if len(parts) > 1:
-                        deps = " ".join(prefix + d.strip() for d in parts[1].split())
-                    lines.append(f"{prefix}{module}: {deps}".rstrip())
-            with open(depfile, "w") as f:
-                f.write("\n".join(lines))
+                    if len(parts) == 2:
+                        deps = " ".join(f"{mount_prefix}/lib/modules/{d.strip()}"
+                                    for d in parts[1].split())
+                    new_lines.append(f"{main}: {deps}".rstrip())
+            with open(dep_file, "w") as f:
+                f.write("\n".join(new_lines))
         else:
             log_message("ERROR: modules.dep not found")
             sys.exit(1)
@@ -598,7 +597,7 @@ def build_dlkm_image(image_name: str,
         for name in ["modules.builtin", "modules.builtin.modinfo",
                      "modules.builtin.alias.bin", "modules.builtin.bin"]:
             src = base_modules_dir / kernel_version / name
-            dst = flat_dir / name
+            dst = flat_mod_root / name
             if src.exists():
                 shutil.copy(src, dst)
             else:
@@ -606,7 +605,7 @@ def build_dlkm_image(image_name: str,
 
         # Create modules.load and modules.order
         for filename in ["modules.load", "modules.order"]:
-            output_file_path = flat_dir / filename
+            output_file_path = flat_mod_root / filename
             with open(output_file_path, "w") as f:
                 for name in modules:
                     if name.endswith(".ko"):
