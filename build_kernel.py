@@ -612,12 +612,20 @@ def build_dlkm_image(image_name: str,
                     if name.endswith(".ko"):
                         f.write(name + "\n")
 
+        # Use the appropriate file_contexts based on image_name
+        fc_dir = ROOT_DIR / "sepolicy"
+        if image_name == "system_dlkm":
+            fc_file = fc_dir / "system_dlkm_file_contexts"
+        elif image_name == "vendor_dlkm":
+            fc_file = fc_dir / "vendor_dlkm_file_contexts"
+
         # Create the EROFS image
         run_cmd(
             f"{mkfs} "
             f"-z lz4hc,9 "
             f"-T 0 "
             f"--mount-point {mount_prefix.strip('/')} "
+            f"--file-contexts {str(fc_file)} "
             f"{str(final_img)} "
             f"{str(staging_dir)}",
             fatal_on_error=True
