@@ -9,6 +9,7 @@ import datetime
 import re
 import stat
 import tempfile
+import math
 from pathlib import Path
 from textwrap import dedent
 from typing import Optional
@@ -699,6 +700,75 @@ def build_dlkm_image(image_name: str,
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
+def sign_partition_image(image_path: Path, partition_name: str):
+    """
+    Signs a partition image using AVBTool
+    Uses add_hash_footer for boot.img, and add_hashtree_footer for mountable images
+    """
+    avbtool = KERNELBUILD_TOOLS_PATH / 'avbtool'
+    key_path = MKBOOT_PATH / "gki/testdata/testkey_rsa4096.pem"
+
+    missing = []
+    if not avbtool:
+        missing.append("avbtool")
+    if not image_path.exists():
+        missing.append("image")
+    if not key_path.exists():
+        missing.append("key")
+
+    if missing:
+        log_message(f"ERROR: Required component(s) missing: {', '.join(missing)}")
+        sys.exit(1)
+
+    log_message(f"Signing {partition_name}.img with AVBTool...")
+    if partition_name in {"boot", "vendor_boot", "dtbo"}:
+        # Partitions
+        partition_sizes = {
+            "boot": 67_108_864,
+            "vendor_boot": 67_108_864,
+            "dtbo": 8_388_608,
+            "init_boot": 16_777_216,
+        }
+        padded_size = partition_sizes.get(partition_name)
+        if not padded_size:
+            raw_size = image_path.stat().st_size + (128 * 1024)
+            padded_size = math.ceil(raw_size / 4096) * 4096
+        if partition_name in {"boot", "vendor_boot"}:
+            run_cmd(
+                f"{avbtool} add_hash_footer "
+                f"--image {image_path} "
+                f"--partition_name {partition_name} "
+                f"--partition_size {padded_size} "
+                f"--key {key_path} "
+                f"--algorithm SHA256_RSA4096",
+                fatal_on_error=True
+            )
+        else:
+            run_cmd(
+                f"{avbtool} add_hashtree_footer "
+                f"--image {image_path} "
+                f"--partition_name {partition_name} "
+                f"--partition_size {padded_size} "
+                f"--do_not_generate_fec "
+                f"--hash_algorithm sha256 "
+                f"--key {key_path} "
+                f"--algorithm SHA256_RSA4096",
+                fatal_on_error=True
+            )
+    else:
+        run_cmd(
+            f"{avbtool} add_hashtree_footer "
+            f"--image {image_path} "
+            f"--partition_name {partition_name} "
+            f"--do_not_generate_fec "
+            f"--hash_algorithm sha256 "
+            f"--key {key_path} "
+            f"--algorithm SHA256_RSA4096",
+            fatal_on_error=True
+        )
+
+    log_message(f"{partition_name}.img signed successfully")
+
 def unpack_tarball(archive_path: Path, dest_dir: Path):
     """
     Extracts a .tar.gz archive to the given directory
@@ -921,6 +991,12 @@ def main():
         help="Build system_dlkm.img and vendor_dlkm.img using mkfs.erofs"
     )
 
+    parser.add_argument(
+        "--sign-images",
+        action="store_true",
+        help="Enable AVB signing for all detected images"
+    )
+
     args = parser.parse_args()
 
     log_message("Starting Android kernel build process...")
@@ -962,6 +1038,30 @@ def main():
                 mount_prefix="/vendor_dlkm",
                 sign_modules=False,
             )
+
+        # Sign images if requested
+        if args.sign_images:
+            images = [
+                ("dtbo", DIST_DIR / "dtbo.img", args.create_boot_image),
+                ("boot", DIST_DIR / "boot.img", args.create_boot_image),
+                ("system_dlkm", DIST_DIR / "system_dlkm.img", args.build_dlkm_image),
+                ("vendor_dlkm", DIST_DIR / "vendor_dlkm.img", args.build_dlkm_image),
+            ]
+
+            signed_any = False
+            for name, path, requested in images:
+                if path.exists():
+                    if requested:
+                        sign_partition_image(path, name)
+                        signed_any = True
+                    else:
+                        log_message(f"SKIP: {name}.img exists but not requested")
+                elif requested:
+                    log_message(f"MISS: {name}.img requested but not built")
+
+            if not signed_any:
+                log_message("ERROR: --sign-images given but no image found to sign")
+                sys.exit(1)
 
     except SystemExit:
         log_message("Build process terminated due to fatal error")
