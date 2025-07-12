@@ -700,6 +700,79 @@ def build_dlkm_image(image_name: str,
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
+def build_vendorboot_image():
+    """
+    Assemble vendor_boot.img using mkbootimg (header version 4).
+
+    Combines multiple vendor ramdisk fragments (platform, dlkm, recovery),
+    a DTB image, and embeds a basic vendor bootconfig file
+
+    Requires:
+        - DTB image generated with --create-dtbo-images
+        - Vendor ramdisk fragments generated with --build-vendor-ramdisk-dlkm
+    """
+    image_name = "vendor_boot"
+    final_img = DIST_DIR / f"{image_name}.img"
+    parts_dir = ROOT_DIR / "vb_fragments"
+
+    vendor_ramdisk_dlkm = DIST_DIR / "vendor_ramdisk_dlkm.cpio.lz4"
+    dtb_path = DIST_DIR / "dtb.img"
+    vendor_ramdisk_platform = parts_dir / "vendor_ramdisk_platform.lz4"
+    vendor_ramdisk_recovery = parts_dir / "vendor_ramdisk_recovery.lz4"
+
+    # Create staging directory
+    staging_dir = Path(tempfile.mkdtemp(prefix=f"{image_name}_staging_"))
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Create bootconfig
+        bootconfig_file = staging_dir / "vendor_bootconfig.txt"
+        bootconfig_file.write_text(
+            "buildtime_bootconfig=enable\n"
+            "androidboot.serialconsole=0\n"
+        )
+
+        # Check required files
+        for x in [
+            vendor_ramdisk_platform,
+            vendor_ramdisk_recovery,
+            vendor_ramdisk_dlkm,
+            dtb_path
+        ]:
+            if not x.exists():
+                log_message(f"Missing required file: {x}")
+                sys.exit(1)
+
+        # Run mkbootimg
+        run_cmd(
+            f"{MKBOOT_PATH / 'mkbootimg.py'} "
+            f"--vendor_bootconfig {bootconfig_file} "
+            f"--vendor_cmdline \"bootconfig loop.max_part=7\" "
+            f"--header_version 4 "
+            f"--dtb {dtb_path} "
+            f"--pagesize 2048 "
+            f"--ramdisk_name platform "
+            f"--ramdisk_type platform "
+            f"--vendor_ramdisk_fragment {vendor_ramdisk_platform} "
+            f"--ramdisk_name dlkm "
+            f"--ramdisk_type dlkm "
+            f"--vendor_ramdisk_fragment {vendor_ramdisk_dlkm} "
+            f"--ramdisk_name recovery "
+            f"--ramdisk_type recovery "
+            f"--vendor_ramdisk_fragment {vendor_ramdisk_recovery} "
+            f"--vendor_boot {final_img} ",
+            fatal_on_error=True
+        )
+
+        if not final_img.exists():
+            log_message(f"Failed to generate {final_img}")
+            sys.exit(1)
+
+    finally:
+        if staging_dir.exists():
+            log_message(f"Cleaning up temporary directory: {staging_dir}")
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
 def sign_partition_image(image_path: Path, partition_name: str):
     """
     Signs a partition image using AVBTool
@@ -986,6 +1059,12 @@ def main():
     )
 
     parser.add_argument(
+        "--build-vendor-boot-image",
+        action="store_true",
+        help="Build vendor_boot.img"
+    )
+
+    parser.add_argument(
         "--build-dlkm-image",
         action="store_true",
         help="Build system_dlkm.img and vendor_dlkm.img using mkfs.erofs"
@@ -1010,19 +1089,41 @@ def main():
 
         # Build kernel Image
         build_kernel(args.jobs)
-        if args.create_dtbo_images:
+
+        # If user explicitly asked for dtbo images only
+        if args.create_dtbo_images or args.build_vendor_boot_image:
             build_dtbo_images()
 
         if args.create_boot_image:
             build_boot_image()
 
-        # Build vendor_ramdisk_dlkm if requested
-        if args.build_vendor_ramdisk_dlkm:
+        # If user explicitly asked for vendor_ramdisk_dlkm only (not via vendor_boot)
+        if args.build_vendor_ramdisk_dlkm and not args.build_vendor_boot_image:
             mk_vendor_rd_dlkm(
                 mount_prefix="",
                 module_early_list_file=VENDOR_RAMDISK_DLKM_EARLY_MODULES_FILE,
                 module_list_file=VENDOR_RAMDISK_DLKM_MODULES_FILE
             )
+
+        # Build vendor_boot.img
+        if args.build_vendor_boot_image:
+            if not args.create_dtbo_images:
+                log_message("Auto-enabling --create-dtbo-images (required for vendor_boot.img)")
+                args.create_dtbo_images = True
+            if not args.build_vendor_ramdisk_dlkm:
+                log_message("Auto-enabling --build-vendor-ramdisk-dlkm (required for vendor_boot.img)")
+                args.build_vendor_ramdisk_dlkm = True
+
+            # Build dtbo image
+            build_dtbo_images()
+
+            # Build vendor_ramdisk_dlkm
+            mk_vendor_rd_dlkm(
+                mount_prefix="",
+                module_early_list_file=VENDOR_RAMDISK_DLKM_EARLY_MODULES_FILE,
+                module_list_file=VENDOR_RAMDISK_DLKM_MODULES_FILE
+            )
+            build_vendorboot_image()
 
         # Build system_dlkm and vendor_dlkm images if needed
         if args.build_dlkm_image:
@@ -1042,10 +1143,11 @@ def main():
         # Sign images if requested
         if args.sign_images:
             images = [
-                ("dtbo", DIST_DIR / "dtbo.img", args.create_boot_image),
+                ("dtbo", DIST_DIR / "dtbo.img", args.create_dtbo_images),
                 ("boot", DIST_DIR / "boot.img", args.create_boot_image),
                 ("system_dlkm", DIST_DIR / "system_dlkm.img", args.build_dlkm_image),
                 ("vendor_dlkm", DIST_DIR / "vendor_dlkm.img", args.build_dlkm_image),
+                ("vendor_boot", DIST_DIR / "vendor_boot.img", args.build_vendor_boot_image),
             ]
 
             signed_any = False
