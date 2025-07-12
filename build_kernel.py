@@ -1117,6 +1117,11 @@ def main():
             args.build_dlkm_image
         )
 
+        # Clean dist output from previous build
+        if DIST_DIR.exists():
+            log_message(f"Cleaning DIST_DIR: {DIST_DIR}")
+            shutil.rmtree(DIST_DIR, ignore_errors=True)
+
         # Build kernel Image
         build_kernel(args.jobs, install_modules=install_modules)
 
