@@ -32,9 +32,6 @@ BUILD_LOG_FILE = ROOT_DIR / "kernel_build.log"
 # Defconfig used for kernel build
 KERNEL_DEFCONFIG = "essi_defconfig"
 
-# Path to the kernel source tree
-KERNEL_SOURCE_DIR = ROOT_DIR.parent / "exynos-kernel"
-
 # Path to a kernel modules list file
 VENDOR_RAMDISK_DLKM_EARLY_MODULES_FILE = ROOT_DIR / "modules.early.load"
 VENDOR_RAMDISK_DLKM_MODULES_FILE = ROOT_DIR / "modules.load"
@@ -49,6 +46,7 @@ GAS_PATH = None
 MKBOOT_PATH = None
 RAMDISK_PATH = None
 MODULES_STAGING_DIR = None
+KERNEL_SOURCE_DIR = None
 
 # Config for downloading required prebuilts
 PREBUILTS_CONFIG = {
@@ -71,15 +69,7 @@ PREBUILTS_CONFIG = {
         "target_dir_name": "gas/linux-x86",
         "bin_path_suffix": "",
         "download_type": "git",
-        "repo_url": "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/",
-        "branch": "main",
-        "depth": 1
-    },
-    "Ramdisk_Repo": {
-        "target_dir_name": "ramdisk_repo",
-        "bin_path_suffix": "",
-        "download_type": "git",
-        "repo_url": "https://gitlab.com/velpecula/samsung_s5e8845/a55x-kernel/kernel_samsung_prebuilt.git",
+        "repo_url": "https://android.googlesource.com/platform/prebuilts/gas/linux-x86",
         "branch": "main",
         "depth": 1
     },
@@ -91,6 +81,22 @@ PREBUILTS_CONFIG = {
         "branch": "android14-qpr3-release",
         "depth": 1
     },
+    "Ramdisk_Repo": {
+        "target_dir_name": "ramdisk_repo",
+        "bin_path_suffix": "",
+        "download_type": "git",
+        "repo_url": "https://gitlab.com/velpecula/samsung_s5e8845/a55x-kernel/kernel_samsung_prebuilt.git",
+        "branch": "main",
+        "depth": 1
+    },
+    "Kernel_Source": {
+        "target_dir_name": "exynos-kernel",
+        "bin_path_suffix": "",
+        "download_type": "git",
+        "repo_url": "https://github.com/mst8981/android_kernel_samsung_a55x.git",
+        "branch": "exynos-6.1-lts-dev",
+        "depth": 1
+    }
 }
 
 def log_message(message: str):
@@ -159,7 +165,7 @@ def validate_prebuilts():
     """
     log_message("Checking required prebuilts...")
 
-    global OUT_DIR, DIST_DIR, MODULES_STAGING_DIR
+    global OUT_DIR, DIST_DIR, MODULES_STAGING_DIR, KERNEL_SOURCE_DIR
 
     required = {
         "Toolchain": TOOLCHAIN_PATH,
@@ -167,6 +173,7 @@ def validate_prebuilts():
         "GAS": GAS_PATH,
         "Mkbootimg Tool": MKBOOT_PATH,
         "Ramdisk": RAMDISK_PATH,
+        "Kernel Source": KERNEL_SOURCE_DIR,
     }
 
     for name, path in required.items():
@@ -941,6 +948,9 @@ def setup_environment():
     """
     log_message("Initializing environment...")
 
+    global TOOLCHAIN_PATH, GAS_PATH, KERNELBUILD_TOOLS_PATH
+    global MKBOOT_PATH, RAMDISK_PATH, KERNEL_SOURCE_DIR
+
     # Global Environment Variables
     os.environ["ARCH"] = ARCH
     os.environ["CROSS_COMPILE"] = CROSS_COMPILE_PREFIX
@@ -949,12 +959,19 @@ def setup_environment():
         f"CROSS_COMPILE={os.environ['CROSS_COMPILE']}, "
         f"TARGET_SOC={os.environ['TARGET_SOC']}")
 
-    global TOOLCHAIN_PATH, GAS_PATH, KERNELBUILD_TOOLS_PATH
-    global MKBOOT_PATH, RAMDISK_PATH
-
     for name, config in PREBUILTS_CONFIG.items():
-        target = PREBUILTS_BASE_DIR / config["target_dir_name"]
+        if name == "Kernel_Source":
+            target = ROOT_DIR.parent / config["target_dir_name"]
+        else:
+            target = PREBUILTS_BASE_DIR / config["target_dir_name"]
+
         get_prebuilt(name, config, target)
+        if name == "Kernel_Source":
+            expected_kernel_path = ROOT_DIR.parent / "exynos-kernel"
+            if target.resolve() != expected_kernel_path.resolve():
+                log_message(f"WARNING: Kernel_Source path mismatch: "
+                    f"'{target.resolve()}' != '{expected_kernel_path.resolve()}'")
+            KERNEL_SOURCE_DIR = target
 
     # Set paths to prebuilts
     TOOLCHAIN_PATH = (
@@ -979,6 +996,10 @@ def setup_environment():
         PREBUILTS_BASE_DIR /
         PREBUILTS_CONFIG["Ramdisk_Repo"]["target_dir_name"]
     )
+    KERNEL_SOURCE_DIR = (
+        ROOT_DIR.parent /
+        PREBUILTS_CONFIG["Kernel_Source"]["target_dir_name"]
+    )
 
     log_message("Updating global PATH environment variable...")
     extra_paths = filter(None, [
@@ -987,6 +1008,7 @@ def setup_environment():
         GAS_PATH,
         MKBOOT_PATH,
         RAMDISK_PATH,
+        KERNEL_SOURCE_DIR,
     ])
 
     # Add unique paths to the beginning of the PATH
