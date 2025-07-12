@@ -205,7 +205,7 @@ def clean_build_artifacts():
     
     log_message("Clean operation completed...")
 
-def build_kernel(jobs: int):
+def build_kernel(jobs: int, install_modules: bool):
     """
     Builds the Android kernel using the given defconfig
 
@@ -238,13 +238,14 @@ def build_kernel(jobs: int):
     )
 
     # Install modules to the staging directory
-    log_message(f"Installing all modules to: {MODULES_STAGING_DIR}...")
-    run_cmd(
-        f"make -j{jobs} {make_args} "
-        f"INSTALL_MOD_STRIP='--strip-debug --keep-section=.ARM.attributes' "
-        f"INSTALL_MOD_PATH={MODULES_STAGING_DIR} modules_install",
-        cwd=KERNEL_SOURCE_DIR
-    )
+    if install_modules:
+        log_message(f"Installing all modules to: {MODULES_STAGING_DIR}...")
+        run_cmd(
+            f"make -j{jobs} {make_args} "
+            f"INSTALL_MOD_STRIP='--strip-debug --keep-section=.ARM.attributes' "
+            f"INSTALL_MOD_PATH={MODULES_STAGING_DIR} modules_install",
+            cwd=KERNEL_SOURCE_DIR
+        )
 
     # Source and destination paths for the final kernel Image
     image_path = OUT_DIR / "arch" / ARCH / "boot" / "Image"
@@ -1109,8 +1110,15 @@ def main():
         if args.clean:
             clean_build_artifacts()
 
+        # Determine whether to install kernel modules
+        install_modules = (
+            args.build_vendor_ramdisk_dlkm or
+            args.build_vendor_boot_image or
+            args.build_dlkm_image
+        )
+
         # Build kernel Image
-        build_kernel(args.jobs)
+        build_kernel(args.jobs, install_modules=install_modules)
 
         # If user explicitly asked for dtbo images only
         if args.create_dtbo_images or args.build_vendor_boot_image:
