@@ -1045,6 +1045,12 @@ def main():
 
                 ./build_kernel.py --clean -j$(nproc)
                     Clean and build with all cores
+
+                ./build_kernel.py --build-all
+                    Run full build: dtbo, boot, vendor_boot, dlkm, and sign images
+
+                ./build_kernel.py --clean --build-all
+                    Clean and perform full build with default job count
         """),
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -1100,7 +1106,22 @@ def main():
         help="Enable AVB signing for all detected images"
     )
 
+    parser.add_argument(
+        "--build-all",
+        action="store_true",
+        help="Enable all build options (dtbo, boot, vendor boot, dlkm, sign)"
+    )
+
     args = parser.parse_args()
+    # Full build and sign with --build-all
+    if args.build_all:
+        log_message("All build options enabled")
+        args.create_dtbo_images = True
+        args.create_boot_image = True
+        args.build_vendor_ramdisk_dlkm = True
+        args.build_vendor_boot_image = True
+        args.build_dlkm_image = True
+        args.sign_images = True
 
     log_message("Starting Android kernel build process...")
 
