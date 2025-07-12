@@ -21,6 +21,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 ARCH = "arm64"
 TARGET_SOC = "s5e8845"
 VARIANT = "user"
+TARGET_DEVICE = "a55x"
 CROSS_COMPILE_PREFIX = "aarch64-linux-gnu-"
 
 # Base directory for toolchain and other prebuilts
@@ -267,7 +268,7 @@ def build_dtbo_images():
     - Concatenates *.dtb files into dtb.img
     """
     arch_dts = OUT_DIR / "arch" / ARCH / "boot" / "dts"
-    dtbo_dir = arch_dts / "samsung" / "a55x"
+    dtbo_dir = arch_dts / "samsung" / TARGET_DEVICE
     dtb_dir = arch_dts / "exynos"
 
     dtbo_files = sorted(dtbo_dir.glob("*.dtbo"))
