@@ -928,11 +928,11 @@ def get_prebuilt(name: str, config: dict, target_dir: Path):
     elif download_type == "git":
         repo = config["repo_url"]
         branch = config["branch"]
-        depth = config["depth"]
         log_message(f"Cloning git repo: {repo} (branch: {branch})")
+        depth = config.get("depth")
+        depth_arg = f"--depth {depth}" if depth else ""
         run_cmd(
-            f"git clone --depth {depth} --single-branch "
-            f"--branch {branch} {repo} {target_dir}",
+            f"git clone {depth_arg} --branch {branch} {repo} {target_dir}",
             fatal_on_error=True
         )
         log_message(f"Cloned to: {target_dir}")
