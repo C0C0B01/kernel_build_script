@@ -120,6 +120,7 @@ def log_message(message: str):
 
 def run_cmd(command: str,
             cwd: Optional[Path] = None,
+            extra_env: Optional[dict[str, str]] = None,
             fatal_on_error: bool = True
             ) -> Optional[str]:
     """
@@ -129,6 +130,7 @@ def run_cmd(command: str,
     Args:
         command: Shell command to run
         cwd: Working directory (optional)
+        extra_env: Additional environment variables (optional)
         fatal_on_error: Exit on failure if True
 
     Returns:
@@ -139,10 +141,20 @@ def run_cmd(command: str,
         if cwd else f"Running: '{command}'"
     )
 
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+
     try:
         result = subprocess.run(
-            command, shell=True, check=True, cwd=cwd,
-            capture_output=True, text=True, encoding="utf-8"
+            command,
+            shell=True,
+            check=True,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=env
         )
         log_message("Command succeeded")
         return result.stdout
@@ -158,6 +170,29 @@ def run_cmd(command: str,
     except Exception as e:
         log_message(f"[CRITICAL] Unexpected exception: {e}")
         sys.exit(1)
+
+def get_version_env() -> dict[str, str]:
+    """
+    Returns BRANCH and KMI_GENERATION from build config files as env variables
+    Exits if required files are missing
+    """
+    config_files = {
+        "BRANCH": KERNEL_SOURCE_DIR / "build.config.constants",
+        "KMI_GENERATION": KERNEL_SOURCE_DIR / "build.config.common"
+    }
+
+    result = {}
+    for key, path in config_files.items():
+        try:
+            text = path.read_text()
+            for line in text.splitlines():
+                if line.strip().startswith(f"{key}="):
+                    result[key] = line.split("=", 1)[1].strip().strip('"\'')
+                    break
+        except FileNotFoundError:
+            log_message(f"ERROR: Missing config file: {path}")
+            sys.exit(1)
+    return result
 
 def validate_prebuilts():
     """
@@ -206,12 +241,21 @@ def clean_build_artifacts():
     
     log_message("Clean operation completed...")
 
-def build_kernel(jobs: int, install_modules: bool):
+def build_kernel(jobs: int,
+                 extra_env: Optional[dict[str, str]] = None,
+                 install_modules: bool = False
+                 ) -> Optional[str]:
     """
     Builds the Android kernel using the given defconfig
 
     Args:
         jobs (int): Number of parallel make jobs (-j)
+        extra_env (dict[str, str], optional): Additional environment variables
+            (e.g. BRANCH, KMI_GENERATION) for versioning or build scripts
+        install_modules (bool): Whether to install kernel modules to the staging directory
+
+    Returns:
+        Optional[str]: Not used, present for compatibility
     """
     log_message(f"Starting kernel build with {jobs} parallel jobs...")
 
@@ -231,10 +275,13 @@ def build_kernel(jobs: int, install_modules: bool):
         fatal_on_error=True
     )
 
+    # Compile the kernel Image
     log_message("Compiling kernel Image...")
+    extra_version = extra_env
     run_cmd(
-        f"make -j{jobs} {make_args}", 
+        f"make -j{jobs} {make_args}",
         cwd=KERNEL_SOURCE_DIR,
+        extra_env=extra_version,
         fatal_on_error=True
     )
 
@@ -1071,6 +1118,12 @@ def main():
     )
 
     parser.add_argument(
+        "--extra-local-version",
+        action="store_true",
+        help="Inject BRANCH and KMI_GENERATION into environment for setlocalversion"
+    )
+
+    parser.add_argument(
         "--create-dtbo-images",
         action="store_true",
         help="Create dtbo.img and dtb.img from compiled DTBO/DTB files"
@@ -1116,6 +1169,7 @@ def main():
     # Full build and sign with --build-all
     if args.build_all:
         log_message("All build options enabled")
+        args.extra_local_version = True
         args.create_dtbo_images = True
         args.create_boot_image = True
         args.build_vendor_ramdisk_dlkm = True
@@ -1145,7 +1199,14 @@ def main():
             shutil.rmtree(DIST_DIR, ignore_errors=True)
 
         # Build kernel Image
-        build_kernel(args.jobs, install_modules=install_modules)
+        # If --extra-local-version is enabled, inject BRANCH and KMI_GENERATION
+        # from build config files into the environment for setlocalversion
+        if args.extra_local_version:
+            version_env = get_version_env()
+            log_message(f"Using local version env: BRANCH={version_env['BRANCH']}, KMI_GENERATION={version_env['KMI_GENERATION']}")
+            build_kernel(args.jobs, version_env, install_modules=install_modules)
+        else:
+            build_kernel(args.jobs, install_modules=install_modules)
 
         # If user explicitly asked for dtbo images only
         if args.create_dtbo_images or args.build_vendor_boot_image:
