@@ -3,6 +3,7 @@
 import os
 import sys
 import subprocess
+import json
 import shutil
 import argparse
 import datetime
@@ -50,55 +51,7 @@ MODULES_STAGING_DIR = None
 KERNEL_SOURCE_DIR = None
 
 # Config for downloading required prebuilts
-PREBUILTS_CONFIG = {
-    "Toolchain": {
-        "target_dir_name": "clang/host/linux-x86/llvm-20.1.8-x86_64",
-        "bin_path_suffix": "bin",
-        "download_type": "download_url",
-        "download_url": "https://www.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.gz",
-        "extract_name_in_archive": "llvm-20.1.8-x86_64"
-    },
-    "Kernel_Build_Tools": {
-        "target_dir_name": "kernel-build-tools",
-        "bin_path_suffix": Path("linux-x86") / "bin",
-        "download_type": "git",
-        "repo_url": "https://android.googlesource.com/kernel/prebuilts/build-tools",
-        "branch": "main-kernel-build-2023",
-        "depth": 1
-    },
-    "GAS": {
-        "target_dir_name": "gas/linux-x86",
-        "bin_path_suffix": "",
-        "download_type": "git",
-        "repo_url": "https://android.googlesource.com/platform/prebuilts/gas/linux-x86",
-        "branch": "main",
-        "depth": 1
-    },
-    "Mkbootimg_Tool": {
-        "target_dir_name": "mkbootimg",
-        "bin_path_suffix": "",
-        "download_type": "git",
-        "repo_url": "https://android.googlesource.com/platform/system/tools/mkbootimg",
-        "branch": "android14-qpr3-release",
-        "depth": 1
-    },
-    "Ramdisk_Repo": {
-        "target_dir_name": "ramdisk_repo",
-        "bin_path_suffix": "",
-        "download_type": "git",
-        "repo_url": "https://gitlab.com/velpecula/samsung_s5e8845/a55x-kernel/kernel_samsung_prebuilt.git",
-        "branch": "main",
-        "depth": 1
-    },
-    "Kernel_Source": {
-        "target_dir_name": "exynos-kernel",
-        "bin_path_suffix": "",
-        "download_type": "git",
-        "repo_url": "https://github.com/mst8981/android_kernel_samsung_a55x.git",
-        "branch": "exynos-6.1-lts-dev",
-        "depth": 1
-    }
-}
+PREBUILTS_CONFIG = json.load(open(ROOT_DIR / "prebuilts.json"))
 
 def log_message(message: str):
     """
