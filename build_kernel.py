@@ -355,8 +355,13 @@ def create_flash_zip():
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="anykernel3_"))
     staging_dir = tmp_dir / "AnyKernel3"
+
+    # Replace anykernel.sh with local version
+    src_path = ROOT_DIR / "src" / "anykernel.sh"
+    target_anykernel_sh = staging_dir / "anykernel.sh"
     try:
         shutil.copytree(ANYKERNEL_PATH, staging_dir, dirs_exist_ok=True)
+        shutil.copy(src_path, target_anykernel_sh)
         shutil.copy(image_path, staging_dir / "Image")
         log_message(f"Copied Image to temp AnyKernel3 folder: {staging_dir/'Image'}")
 
