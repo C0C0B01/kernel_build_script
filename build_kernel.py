@@ -42,12 +42,13 @@ VENDOR_DLKM_MODULES_FILE = ROOT_DIR / "modules.load.vendor_dlkm"
 # Global Paths
 OUT_DIR = None
 DIST_DIR = None
+MODULES_STAGING_DIR = None
 TOOLCHAIN_PATH = None
 KERNELBUILD_TOOLS_PATH = None
 GAS_PATH = None
 MKBOOT_PATH = None
+ANYKERNEL_PATH = None
 RAMDISK_PATH = None
-MODULES_STAGING_DIR = None
 KERNEL_SOURCE_DIR = None
 
 # Config for downloading required prebuilts
@@ -161,6 +162,7 @@ def validate_prebuilts():
         "Kernel Build Tools": KERNELBUILD_TOOLS_PATH,
         "GAS": GAS_PATH,
         "Mkbootimg Tool": MKBOOT_PATH,
+        "Anykernel3": ANYKERNEL_PATH,
         "Ramdisk": RAMDISK_PATH,
         "Kernel Source": KERNEL_SOURCE_DIR,
     }
@@ -343,6 +345,33 @@ def build_boot_image():
         log_message(f"boot.img created at {bootimg_output_path}")
     else:
         sys.exit(1)
+
+def create_flash_zip():
+    """Create a flashable ZIP from the built kernel Image"""
+    image_path = DIST_DIR / "Image"
+    if not image_path.exists():
+        log_message(f"ERROR: Kernel Image not found: {image_path}")
+        sys.exit(1)
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="anykernel3_"))
+    staging_dir = tmp_dir / "AnyKernel3"
+    try:
+        shutil.copytree(ANYKERNEL_PATH, staging_dir, dirs_exist_ok=True)
+        shutil.copy(image_path, staging_dir / "Image")
+        log_message(f"Copied Image to temp AnyKernel3 folder: {staging_dir/'Image'}")
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
+        output_zip = DIST_DIR / f"{TARGET_DEVICE}-{VARIANT}-{timestamp}.zip"
+        run_cmd(
+            f"cd {staging_dir} && zip -r9 {output_zip} * -x .git/*",
+            fatal_on_error=True
+        )
+        log_message(f"Created flashable ZIP: {output_zip}")
+    except Exception as e:
+        log_message(f"ERROR during flash ZIP creation: {e}")
+        sys.exit(1)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 def read_modules_file(file_path: Path) -> list[str]:
     """
@@ -951,7 +980,7 @@ def setup_environment():
     log_message("Initializing environment...")
 
     global TOOLCHAIN_PATH, GAS_PATH, KERNELBUILD_TOOLS_PATH
-    global MKBOOT_PATH, RAMDISK_PATH, KERNEL_SOURCE_DIR
+    global MKBOOT_PATH, ANYKERNEL_PATH, RAMDISK_PATH, KERNEL_SOURCE_DIR
 
     # Global Environment Variables
     os.environ["ARCH"] = ARCH
@@ -994,6 +1023,10 @@ def setup_environment():
         PREBUILTS_BASE_DIR /
         PREBUILTS_CONFIG["Mkbootimg_Tool"]["target_dir_name"]
     )
+    ANYKERNEL_PATH = (
+        PREBUILTS_BASE_DIR /
+        PREBUILTS_CONFIG["Anykernel3"]["target_dir_name"]
+    )
     RAMDISK_PATH = (
         PREBUILTS_BASE_DIR /
         PREBUILTS_CONFIG["Ramdisk_Repo"]["target_dir_name"]
@@ -1009,6 +1042,7 @@ def setup_environment():
         KERNELBUILD_TOOLS_PATH,
         GAS_PATH,
         MKBOOT_PATH,
+        ANYKERNEL_PATH,
         RAMDISK_PATH,
         KERNEL_SOURCE_DIR,
     ])
@@ -1113,6 +1147,12 @@ def main():
     )
 
     parser.add_argument(
+        "--flashable-zip",
+        action="store_true",
+        help="Create flashable ZIP from built Image"
+    )
+
+    parser.add_argument(
         "--build-all",
         action="store_true",
         help="Enable all build options (dtbo, boot, vendor boot, dlkm, sign)"
@@ -1125,6 +1165,7 @@ def main():
         args.extra_local_version = True
         args.create_dtbo_images = True
         args.create_boot_image = True
+        args.flashable_zip = True
         args.build_vendor_ramdisk_dlkm = True
         args.build_vendor_boot_image = True
         args.build_dlkm_image = True
@@ -1160,6 +1201,10 @@ def main():
             build_kernel(args.jobs, version_env, install_modules=install_modules)
         else:
             build_kernel(args.jobs, install_modules=install_modules)
+
+        # Flashable ZIP
+        if args.flashable_zip:
+            create_flash_zip()
 
         # If user explicitly asked for dtbo images only
         if args.create_dtbo_images or args.build_vendor_boot_image:

@@ -30,6 +30,13 @@
         "branch": "android14-qpr3-release",
         "depth": 1
     },
+    "Anykernel3": {
+        "target_dir_name": "Anykernel3",
+        "bin_path_suffix": "",
+        "download_type": "git",
+        "repo_url": "https://github.com/osm0sis/AnyKernel3.git",
+        "branch": "master"
+    },
     "Ramdisk_Repo": {
         "target_dir_name": "ramdisk_repo",
         "bin_path_suffix": "",
