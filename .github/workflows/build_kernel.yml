@@ -1,0 +1,71 @@
+name: Kernel Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout kernel_build_script
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison build-essential curl flex git \
+            libssl-dev libncurses-dev libelf-dev \
+            python3 python3-pip unzip xz-utils \
+            cpio rsync zip jq
+
+      - name: Run Kernel Build Script
+        run: |
+          python3 build_kernel.py --build-all
+
+      - name: Set Release Metadata
+        id: release_info
+        run: |
+          # Read metadata from prebuilts.json
+          KERNEL_DIR=$(jq -r '.Kernel_Source.target_dir_name' prebuilts.json)
+          CLANG_DIR=$(jq -r '.Toolchain.target_dir_name' prebuilts.json)
+          CLANG_BIN="../prebuilts/$CLANG_DIR/bin/clang"
+
+          MAKEFILE="../$KERNEL_DIR/Makefile"
+          VERSION=$(grep -m1 '^VERSION =' "$MAKEFILE" | awk '{print $3}')
+          PATCHLEVEL=$(grep -m1 '^PATCHLEVEL =' "$MAKEFILE" | awk '{print $3}')
+          SUBLEVEL=$(grep -m1 '^SUBLEVEL =' "$MAKEFILE" | awk '{print $3}')
+          KERNEL_VERSION="$VERSION.$PATCHLEVEL.$SUBLEVEL"
+
+          # Clang version
+          CLANG_VERSION=$($CLANG_BIN --version | head -n1 | sed 's/.*version //')
+
+          # Kernel commit hash
+          KERNEL_COMMIT=$(git -C "../$KERNEL_DIR" rev-parse --short HEAD)
+
+          echo "tag=$KERNEL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "kernel_version=$KERNEL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "clang=$CLANG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$KERNEL_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Artifacts
+        run: |
+          mkdir -p artifacts
+          cp ../out/dist/*.img artifacts/ || true
+          cp ../out/dist/Image artifacts/ || true
+          cp ../out/dist/vendor_ramdisk_dlkm.cpio.lz4 artifacts/ || true
+
+      - name: Upload to kernelsource Release
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: mst8981/android_kernel_samsung_a55x
+          tag_name: ${{ steps.release_info.outputs.tag }}
+          name: Kernel ${{ steps.release_info.outputs.kernel_version }}
+          body: |
+            * Kernel version: ${{ steps.release_info.outputs.kernel_version }}
+            * Clang version: ${{ steps.release_info.outputs.clang }}
+            * Kernel commit: ${{ steps.release_info.outputs.commit }}
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
