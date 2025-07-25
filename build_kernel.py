@@ -48,7 +48,6 @@ KERNELBUILD_TOOLS_PATH = None
 GAS_PATH = None
 MKBOOT_PATH = None
 ANYKERNEL_PATH = None
-RAMDISK_PATH = None
 KERNEL_SOURCE_DIR = None
 
 # Config for downloading required prebuilts
@@ -163,7 +162,6 @@ def validate_prebuilts():
         "GAS": GAS_PATH,
         "Mkbootimg Tool": MKBOOT_PATH,
         "Anykernel3": ANYKERNEL_PATH,
-        "Ramdisk": RAMDISK_PATH,
         "Kernel Source": KERNEL_SOURCE_DIR,
     }
 
@@ -310,31 +308,18 @@ def build_dtbo_images():
 
 def build_boot_image():
     """
-    Builds boot.img from kernel image and prebuilt ramdisk
+    Builds boot.img from kernel image
     """
     # Paths to input and output files
     kernel_image_path = OUT_DIR / "arch" / ARCH / "boot" / "Image"
     bootimg_output_path = DIST_DIR / "boot.img"
 
-    prebuilt_ramdisk = (
-        RAMDISK_PATH /
-        "boot-artifacts" / "arm64" / "exynos" / VARIANT /"ramdisk.cpio.lz4"
-    )
-
-    # Check required files
-    required_files = [
-        (kernel_image_path, "Kernel image"),
-        (prebuilt_ramdisk, "Ramdisk image"),
-    ]
-
-    for file_path, description in required_files:
-        if not file_path.is_file():
-            log_message(f"ERROR: {description} not found: {file_path}")
-            sys.exit(1)
+    if not kernel_image_path.is_file():
+        log_message(f"ERROR: Kernel image not found: {kernel_image_path}")
+        sys.exit(1)
 
     run_cmd(
         f"{MKBOOT_PATH / 'mkbootimg.py'} --kernel {kernel_image_path} "
-        f"--ramdisk {prebuilt_ramdisk} "
         f"--output {bootimg_output_path} "
         f"--pagesize 4096 "
         f"--header_version 4 ",
@@ -985,7 +970,7 @@ def setup_environment():
     log_message("Initializing environment...")
 
     global TOOLCHAIN_PATH, GAS_PATH, KERNELBUILD_TOOLS_PATH
-    global MKBOOT_PATH, ANYKERNEL_PATH, RAMDISK_PATH, KERNEL_SOURCE_DIR
+    global MKBOOT_PATH, ANYKERNEL_PATH, KERNEL_SOURCE_DIR
 
     # Global Environment Variables
     os.environ["ARCH"] = ARCH
@@ -1032,10 +1017,6 @@ def setup_environment():
         PREBUILTS_BASE_DIR /
         PREBUILTS_CONFIG["Anykernel3"]["target_dir_name"]
     )
-    RAMDISK_PATH = (
-        PREBUILTS_BASE_DIR /
-        PREBUILTS_CONFIG["Ramdisk_Repo"]["target_dir_name"]
-    )
     KERNEL_SOURCE_DIR = (
         ROOT_DIR.parent /
         PREBUILTS_CONFIG["Kernel_Source"]["target_dir_name"]
@@ -1048,7 +1029,6 @@ def setup_environment():
         GAS_PATH,
         MKBOOT_PATH,
         ANYKERNEL_PATH,
-        RAMDISK_PATH,
         KERNEL_SOURCE_DIR,
     ])
 
@@ -1124,7 +1104,7 @@ def main():
     parser.add_argument(
         "--create-boot-image",
         action="store_true",
-        help="Create boot.img using compiled kernel and prebuilt ramdisk"
+        help="Create boot.img using compiled kernel"
     )
 
     parser.add_argument(

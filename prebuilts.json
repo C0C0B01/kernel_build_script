@@ -37,14 +37,6 @@
         "repo_url": "https://github.com/osm0sis/AnyKernel3.git",
         "branch": "master"
     },
-    "Ramdisk_Repo": {
-        "target_dir_name": "ramdisk_repo",
-        "bin_path_suffix": "",
-        "download_type": "git",
-        "repo_url": "https://gitlab.com/velpecula/samsung_s5e8845/a55x-kernel/kernel_samsung_prebuilt.git",
-        "branch": "main",
-        "depth": 1
-    },
     "Kernel_Source": {
         "target_dir_name": "exynos-kernel",
         "bin_path_suffix": "",
