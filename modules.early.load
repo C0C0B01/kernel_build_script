@@ -3,3 +3,5 @@ exynos-reboot.ko
 clk_exynos.ko
 s3c2410_wdt.ko
 exynos_mct_v3.ko
+sec_debug_base_early.ko
+sec_debug_mode.ko
