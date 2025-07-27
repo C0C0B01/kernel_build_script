@@ -906,17 +906,28 @@ def get_prebuilt(name: str, config: dict, target_dir: Path):
     Fetches a prebuilt from a URL or Git repo if not already present
     Updates Git repositories if needed
     """
-    log_message(f"Checking prebuilt '{name}' at '{target_dir}'...")
+    log_message(f"Checking prebuilt '{name}' at '{target_dir}' ...")
 
+    marker_file = target_dir / ".prebuilt_ready"
     if target_dir.exists():
-        log_message(f"Found '{name}' at '{target_dir}'.")
+        if not marker_file.exists():
+            log_message(f"Target '{name}' exists but no marker file found")
+            if config["download_type"] == "git":
+                log_message("Skipping clone to avoid git error, marking as ready")
+                marker_file.touch()
+                return
+        elif config.get("skip_update", False):
+            log_message(f"'{name}' exists, skipping update (--skip-prebuilt-update)")
+            return
+
         if config["download_type"] == "git":
-            log_message(f"Updating git repository for '{name}'...")
             git_dir = target_dir / ".git"
             if git_dir.is_dir():
+                log_message(f"Updating git repository for '{name}' ...")
                 run_cmd("git pull", cwd=target_dir, fatal_on_error=False)
             else:
-                log_message(f"'{target_dir}' is not a Git repo, Skipping pull")
+                log_message(f"'{target_dir}' is not a Git repo, skipping pull")
+        marker_file.touch()
         return
 
     log_message(f"'{name}' not found, Fetching...")
@@ -924,13 +935,12 @@ def get_prebuilt(name: str, config: dict, target_dir: Path):
     # Ensure parent directory exists
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
+    # Determine download type and fetch accordingly
     download_type = config["download_type"]
-
     if download_type == "download_url":
         archive = ROOT_DIR / f"temp_{name.lower().replace(' ', '_')}.tar.gz"
         url = config["download_url"]
         log_message(f"Downloading '{name}' from: {url}")
-
         # Choose available downloader
         if shutil.which("wget"):
             cmd = f"wget -q -O {archive} '{url}'"
@@ -945,7 +955,7 @@ def get_prebuilt(name: str, config: dict, target_dir: Path):
         unpack_tarball(archive, target_dir)
         os.remove(archive)
         log_message(f"Extraction complete: {target_dir}")
-
+        marker_file.touch()
     elif download_type == "git":
         repo = config["repo_url"]
         branch = config["branch"]
@@ -957,12 +967,12 @@ def get_prebuilt(name: str, config: dict, target_dir: Path):
             fatal_on_error=True
         )
         log_message(f"Cloned to: {target_dir}")
-
+        marker_file.touch()
     else:
         log_message(f"ERROR: Unknown download_type '{download_type}'")
         sys.exit(1)
 
-def setup_environment():
+def setup_environment(skip_prebuilt_update: bool = False):
     """
     Prepares the build environment by ensuring all prebuilts are present
     Downloads missing prebuilts and sets global paths
@@ -985,7 +995,8 @@ def setup_environment():
             target = ROOT_DIR.parent / config["target_dir_name"]
         else:
             target = PREBUILTS_BASE_DIR / config["target_dir_name"]
-
+        # Skip update if requested
+        config["skip_update"] = skip_prebuilt_update
         get_prebuilt(name, config, target)
         if name == "Kernel_Source":
             expected_kernel_path = ROOT_DIR.parent / "exynos-kernel"
@@ -1090,6 +1101,12 @@ def main():
     )
 
     parser.add_argument(
+        "--skip-prebuilt-update",
+        action="store_true",
+        help="Skip updating or downloading prebuilts if already present"
+    )
+
+    parser.add_argument(
         "--extra-local-version",
         action="store_true",
         help="Inject BRANCH and KMI_GENERATION into environment for setlocalversion"
@@ -1159,7 +1176,8 @@ def main():
     log_message("Starting Android kernel build process...")
 
     try:
-        setup_environment()
+        # Setup environment and validate prebuilts
+        setup_environment(skip_prebuilt_update=args.skip_prebuilt_update)
         validate_prebuilts()
 
         if args.clean:
