@@ -11,7 +11,7 @@ do.systemless=1
 do.cleanup=1
 do.cleanuponabort=0
 supported.versions=
-supported.versions=14, 15
+supported.versions=14, 15, 16
 supported.patchlevels=
 supported.vendorpatchlevels=
 '; } # end properties
