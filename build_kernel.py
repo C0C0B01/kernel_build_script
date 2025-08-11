@@ -924,7 +924,7 @@ def get_prebuilt(name: str, config: dict, target_dir: Path):
             git_dir = target_dir / ".git"
             if git_dir.is_dir():
                 log_message(f"Updating git repository for '{name}' ...")
-                run_cmd("git pull", cwd=target_dir, fatal_on_error=False)
+                run_cmd("git pull --recurse-submodules", cwd=target_dir, fatal_on_error=False)
             else:
                 log_message(f"'{target_dir}' is not a Git repo, skipping pull")
         marker_file.touch()
@@ -961,9 +961,9 @@ def get_prebuilt(name: str, config: dict, target_dir: Path):
         branch = config["branch"]
         log_message(f"Cloning git repo: {repo} (branch: {branch})")
         depth = config.get("depth")
-        depth_arg = f"--depth {depth}" if depth else ""
+        depth_arg = f"--depth {depth} --shallow-submodules" if depth else ""
         run_cmd(
-            f"git clone {depth_arg} --branch {branch} {repo} {target_dir}",
+            f"git clone --recurse-submodules {depth_arg} --branch {branch} {repo} {target_dir}",
             fatal_on_error=True
         )
         log_message(f"Cloned to: {target_dir}")
